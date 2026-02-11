@@ -1,0 +1,184 @@
+{
+  "name": "Live Score Notification Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "url": "https://api.cricapi.com/v1/currentMatches?",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "3db4738c-5025-49bb-b564-263d68dd32fd"
+            },
+            {
+              "name": "offset",
+              "value": "0"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -32,
+        0
+      ],
+      "id": "acf539f8-bed8-46d5-89ab-e6d8a634be32",
+      "name": "HTTP Request1"
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -432,
+        16
+      ],
+      "id": "1ca76a02-82b3-4168-8393-1045cfb65dfb",
+      "name": "Telegram Trigger",
+      "webhookId": "848ee0c8-8746-44f5-b6ef-da9225fb1d64",
+      "credentials": {
+        "telegramApi": {
+          "id": "rHf2ljzTVAt6o0tk",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "14ac92a2-f070-49cf-9e96-b5556e4a12c1",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "/start",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -304,
+        16
+      ],
+      "id": "bd2c55c1-0922-4560-91b8-6df9913afb2d",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.reply }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        368,
+        0
+      ],
+      "id": "fa0284d0-6bfd-492c-a3ae-0809e480b1d9",
+      "name": "Send a text message",
+      "webhookId": "aafe3e13-621b-4aac-8a8c-ad967a4898ff",
+      "credentials": {
+        "telegramApi": {
+          "id": "rHf2ljzTVAt6o0tk",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const userText = $node[\"Telegram Trigger\"].json.message.text || \"\";\nconst matches = $json.data || [];\n\n// ---- NORMALIZE TEXT ----\nfunction normalize(text) {\n  return text\n    .toLowerCase()\n    .replace(/[^a-z]/g, \"\");\n}\n\nconst input = normalize(userText);\nlet foundMatch = null;\n\n// ---- MATCH TEAM USING FULL NAME + SHORTNAME ----\nfor (const match of matches) {\n\n  const teams = match.teams || [];\n  const teamInfo = match.teamInfo || [];\n\n  if (teams.length < 2 || teamInfo.length < 2) continue;\n\n  const fullA = normalize(teams[0]);\n  const fullB = normalize(teams[1]);\n\n  const shortA = normalize(teamInfo[0].shortname || \"\");\n  const shortB = normalize(teamInfo[1].shortname || \"\");\n\n  const matchFound =\n    (input.includes(fullA) || input.includes(shortA)) &&\n    (input.includes(fullB) || input.includes(shortB));\n\n  if (matchFound) {\n    foundMatch = match;\n    break;\n  }\n}\n\nif (!foundMatch) {\n  return [{\n    reply: \"❌ No match found. Try full team names or short names (e.g. NZ vs UAE).\"\n  }];\n}\n\n// ---- BUILD SCORE (ALL INNINGS) ----\nlet infoLines = [];\n\nif (Array.isArray(foundMatch.score) && foundMatch.score.length > 0) {\n  for (const inning of foundMatch.score) {\n    infoLines.push(\n      `${inning.inning}: ${inning.r}/${inning.w} (${inning.o} ov)`\n    );\n  }\n}\n\n// ---- SMART STATUS HANDLING ----\nlet finalStatus = \"Upcoming\";\n\n// 1️⃣ Match finished → RESULT\nif (foundMatch.matchEnded && foundMatch.status) {\n  finalStatus = foundMatch.status;\n}\n\n// 2️⃣ Toss done but match not started\nelse if (\n  !foundMatch.matchStarted &&\n  foundMatch.status &&\n  foundMatch.status.toLowerCase().includes(\"opt\")\n) {\n  finalStatus = foundMatch.status;\n}\n\n// 3️⃣ Match live\nelse if (foundMatch.matchStarted) {\n  finalStatus = \"Live\";\n}\n\nlet extraInfo = \"\";\n\nif (foundMatch.matchStarted && !foundMatch.matchEnded) {\n\n  // If only 1 innings exists\n  if (Array.isArray(foundMatch.score) && foundMatch.score.length === 1) {\n    extraInfo = \"\\nSecond innings yet to start\";\n  }\n\n  // If second innings is running\n  else if (Array.isArray(foundMatch.score) && foundMatch.score.length >= 2) {\n\n    const first = foundMatch.score[0];\n    const second = foundMatch.score[1];\n\n    const target = (first.r || 0) + 1;\n    const currentRuns = second.r || 0;\n    const currentOvers = parseFloat(second.o || 0);\n\n    const totalOvers = 20; // change to 50 for ODI if needed\n\n    const ballsUsed =\n      Math.floor(currentOvers) * 6 +\n      Math.round((currentOvers % 1) * 10);\n\n    const totalBalls = totalOvers * 6;\n    const ballsLeft = totalBalls - ballsUsed;\n    const runsNeeded = target - currentRuns;\n\n    if (ballsLeft > 0 && runsNeeded > 0) {\n      const rrr = ((runsNeeded / ballsLeft) * 6).toFixed(2);\n\n      extraInfo =\n`\\nTarget: ${target}\nNeed: ${runsNeeded} runs from ${ballsLeft} balls\nRRR: ${rrr}`;\n    }\n  }\n}\n\n// ---- FINAL REPLY ----\nreturn [{\n  reply:\n`🏏 ${foundMatch.name}\n\n${infoLines.length ? infoLines.join(\"\\n\") : \"\"}${extraInfo}\n\nStatus: ${finalStatus}`\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        176,
+        0
+      ],
+      "id": "ac331b2a-bad0-4066-9809-3899aba9e632",
+      "name": "Code in JavaScript"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "d98c6330-4902-4e4a-bb7d-ccc456ed9a5a",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "a7371b370ae941fafbfc231d784bb5335fcd3eda37e70cce8d233e6bad5f3ce4"
+  },
+  "id": "CgO0bx1Tw18S0QzHwSiyk",
+  "tags": []
+}
